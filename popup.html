@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مدیریت سکوت لینک‌ها</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="panel">
+    <div class="heading">
+      <img src="icons/icon-48.png" alt="Skyroom Link Mute" class="logo">
+      <div>
+        <h1>مدیریت چت اسکای‌روم</h1>
+        <p>ساکت کردن خودکار ارسال‌کنندگان لینک و آیدی کانال</p>
+      </div>
+    </div>
+
+    <section class="switch-row">
+      <div>
+        <strong>محافظت از چت</strong>
+        <span id="statusText">در حال بارگذاری...</span>
+      </div>
+      <label class="switch" aria-label="روشن یا خاموش کردن افزونه">
+        <input type="checkbox" id="enabled">
+        <span class="slider"></span>
+      </label>
+    </section>
+
+    <section class="stats">
+      <div class="stat-number" id="mutedCount">۰</div>
+      <div class="stat-label">عملیات موفق ساکت کردن در این مرورگر</div>
+      <button id="resetBtn" class="reset-btn">ریست کردن شمارنده</button>
+    </section>
+
+    <p class="hint" id="hint">
+      افزونه فقط پیام‌های کاربران دیگر را بررسی می‌کند. برای فعال شدن، صفحه اتاق اسکای‌روم را باز یا تازه‌سازی کنید.
+    </p>
+    <p>طراحی و توسعه : <a href="https://sajadsalehzadeh.ir/">سجاد صالح زاده</a></p>
+    <footer>نسخه ۱.۲.۰</footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
