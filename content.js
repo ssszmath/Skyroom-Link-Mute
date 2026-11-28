@@ -6,16 +6,22 @@
   window.__skyroomLinkMuteLoaded = true;
 
   let enabled = false;
+  let deleteMessages = false;
   const processedMessages = new Set();
   const inProgressMessages = new Set();
+  let messageQueue = Promise.resolve();
 
-  chrome.storage.local.get({ enabled: false }, result => {
+  chrome.storage.local.get({ enabled: false, deleteMessages: false }, result => {
     enabled = Boolean(result.enabled);
+    deleteMessages = Boolean(result.deleteMessages);
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.enabled) {
       enabled = Boolean(changes.enabled.newValue);
+    }
+    if (area === "local" && changes.deleteMessages) {
+      deleteMessages = Boolean(changes.deleteMessages.newValue);
     }
   });
 
@@ -55,19 +61,19 @@
   function getMessageKey(message) {
     return message.getAttribute("data-message-id") ||
       message.id ||
-      `${message.getAttribute("data-userid") || "unknown"}:${(message.innerText || "").slice(0, 100)}`;
+      message;
   }
 
   function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  async function waitForVisibleMuteMenu(timeout = 1600) {
+  async function waitForVisibleMenu(itemSelector, timeout = 1600) {
     const started = Date.now();
     while (Date.now() - started < timeout) {
       const menus = [...document.querySelectorAll("ul.menu-items")];
       const menu = menus.find(item =>
-        isVisible(item) && item.querySelector("li.mute")
+        isVisible(item) && item.querySelector(itemSelector)
       );
       if (menu) return menu;
       await wait(80);
@@ -75,7 +81,36 @@
     return null;
   }
 
-  async function handleMessage(message) {
+  function getVisibleDeleteConfirmationDialogs() {
+    return [...document.querySelectorAll("div.dialog.dialog-warning")].filter(dialog => {
+      if (!isVisible(dialog)) return false;
+
+      const content = dialog.querySelector(".dialog-content");
+      const text = content ? (content.innerText || content.textContent || "") : "";
+      return text.replace(/\s+/g, " ").trim() === "آیا از حذف پیام اطمینان دارید؟";
+    });
+  }
+
+  async function waitForNewDeleteConfirmation(previousDialogs, timeout = 1600) {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      const dialog = getVisibleDeleteConfirmationDialogs().find(item => !previousDialogs.has(item));
+      if (dialog) return dialog;
+      await wait(80);
+    }
+    return null;
+  }
+
+  function findDialogButton(dialog, label) {
+    return [...dialog.querySelectorAll("button")].find(button => {
+      const textElement = button.querySelector(".btn-text");
+      const text = textElement ? (textElement.innerText || textElement.textContent || "") :
+        (button.innerText || button.textContent || "");
+      return text.replace(/\s+/g, " ").trim() === label;
+    });
+  }
+
+  function handleMessage(message) {
     if (!enabled) return;
     if (!(message instanceof HTMLElement)) return;
     if (!message.matches(".chat-msg.user-chat-msg")) return;
@@ -84,25 +119,30 @@
     const key = getMessageKey(message);
     if (processedMessages.has(key) || inProgressMessages.has(key)) return;
 
-    // فقط یک بار برای هر پیام تلاش می‌کنیم.
     inProgressMessages.add(key);
 
-    try {
+    messageQueue = messageQueue.then(async () => {
+      if (!enabled) return;
+
       const buttons = message.querySelectorAll(".message-commands button");
-      if (!buttons.length) return;
+      if (!buttons.length) {
+        throw new Error("دکمه منوی پیام پیدا نشد.");
+      }
 
       // در ساختار ارسالی، دکمه دوم همان سه‌نقطه است.
       const moreButton = buttons[buttons.length - 1];
       moreButton.click();
 
-      const menu = await waitForVisibleMuteMenu();
+      let menu = await waitForVisibleMenu("li.mute");
       if (!menu) {
-        console.warn("[Skyroom Link Mute] منوی پیام پیدا نشد.");
-        return;
+        throw new Error("منوی پیام پیدا نشد.");
       }
 
       const muteItem = menu.querySelector("li.mute");
-      if (!muteItem) return;
+      const deleteItem = menu.querySelector("li.delete");
+      if (!muteItem || (deleteMessages && !deleteItem)) {
+        throw new Error("گزینه حذف پیام در منو پیدا نشد.");
+      }
 
       // وجود تیکِ قابل مشاهده یعنی کاربر از قبل ساکت شده است.
       const checkedIcon = muteItem.querySelector(".checked-icon");
@@ -110,7 +150,6 @@
 
       if (!alreadyMuted) {
         muteItem.click();
-        processedMessages.add(key);
 
         const result = await chrome.storage.local.get({ mutedCount: 0 });
         await chrome.storage.local.set({
@@ -121,14 +160,67 @@
         console.info("[Skyroom Link Mute] کاربر به دلیل " + reason + " ساکت شد.",
           message.getAttribute("data-userid"));
       } else {
-        processedMessages.add(key);
         console.info("[Skyroom Link Mute] فرستنده از قبل ساکت بوده است.");
       }
-    } catch (error) {
+
+      if (!deleteMessages) {
+        processedMessages.add(key);
+        return;
+      }
+
+      if (!isVisible(menu)) {
+        moreButton.click();
+        menu = await waitForVisibleMenu("li.delete");
+      }
+
+      if (!deleteMessages) {
+        processedMessages.add(key);
+        return;
+      }
+
+      const messageDeleteItem = menu && menu.querySelector("li.delete");
+      if (!messageDeleteItem) {
+        throw new Error("گزینه حذف پیام در منو پیدا نشد.");
+      }
+
+      const previousDialogs = new Set(getVisibleDeleteConfirmationDialogs());
+      messageDeleteItem.click();
+
+      const confirmationDialog = await waitForNewDeleteConfirmation(previousDialogs);
+      if (!confirmationDialog) {
+        if (!deleteMessages) {
+          processedMessages.add(key);
+          return;
+        }
+        throw new Error("دیالوگ تأیید حذف پیام پیدا نشد.");
+      }
+
+      if (!deleteMessages) {
+        const cancelButton = findDialogButton(confirmationDialog, "انصراف");
+        if (cancelButton) {
+          cancelButton.click();
+        } else {
+          console.warn("[Skyroom Link Mute] دکمه انصراف دیالوگ حذف پیدا نشد.");
+        }
+        processedMessages.add(key);
+        return;
+      }
+
+      const confirmButton = findDialogButton(confirmationDialog, "تایید");
+      if (!confirmButton) {
+        throw new Error("دکمه تأیید حذف پیام پیدا نشد.");
+      }
+
+      confirmButton.click();
+      processedMessages.add(key);
+      console.info("[Skyroom Link Mute] پیام حاوی لینک یا آیدی کانال حذف شد.");
+    }).catch(error => {
       console.error("[Skyroom Link Mute] خطا در پردازش پیام:", error);
-    } finally {
+    }).finally(() => {
       inProgressMessages.delete(key);
-    }
+    });
+
+    return messageQueue;
   }
 
   function inspectAddedNode(node) {
